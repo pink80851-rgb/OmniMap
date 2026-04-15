@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <title>辦公室網路佈線監控系統 v2.8</title>
+    <style>
+        :root {
+            --bg-color: #0f172a; --card-bg: #1e293b;
+            --primary-green: #22c55e; --alert-red: #ef4444;
+            --text-main: #f8fafc; --highlight: #38bdf8;
+        }
+        body { font-family: sans-serif; background: var(--bg-color); color: var(--text-main); margin: 0; display: flex; flex-direction: column; height: 100vh; }
+        header { padding: 1rem 2rem; background: #1e293b; border-bottom: 1px solid #334155; display: flex; justify-content: space-between; align-items: center; }
+        .main-container { display: flex; flex: 1; padding: 20px; gap: 20px; overflow: hidden; }
+        #map-container { flex: 2; background: var(--card-bg); border-radius: 12px; position: relative; border: 2px dashed #334155; overflow: hidden; }
+        #side-panel { flex: 1; display: flex; flex-direction: column; gap: 20px; overflow-y: auto; }
+        
+        .switch-mockup { background: #000; padding: 15px; border-radius: 8px; border: 2px solid #334155; }
+        .port-grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 8px; }
+        .port { aspect-ratio: 1; background: #111; border: 1px solid #444; border-radius: 4px; position: relative; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 10px; transition: 0.2s; }
+        .port.active { border-color: var(--highlight); box-shadow: 0 0 10px var(--highlight); }
+        .port-led { width: 6px; height: 6px; background: #333; border-radius: 50%; position: absolute; top: 4px; }
+        .port-led.on { background: var(--primary-green); box-shadow: 0 0 5px var(--primary-green); }
+        .port-note { font-size: 8px; color: var(--highlight); position: absolute; bottom: -12px; white-space: nowrap; pointer-events: none; }
+
+        .dynamic-seat { position: absolute; width: 50px; height: 35px; background: #334155; border: 2px solid #475569; border-radius: 4px; display: flex; align-items: center; justify-content: center; font-size: 10px; cursor: pointer; transition: transform 0.1s; z-index: 10; }
+        .dynamic-seat.active { border-color: var(--highlight); box-shadow: 0 0 12px var(--highlight); z-index: 100; transform: scale(1.1); }
+        
+        /* 隱藏邏輯 CSS */
+        .hide-btn { 
+            position: absolute; top: -8px; right: -8px; width: 18px; height: 18px; 
+            background: var(--alert-red); color: white; border-radius: 50%; 
+            display: none; align-items: center; justify-content: center; 
+            font-size: 12px; border: 1px solid white; z-index: 20; 
+        }
+        body.editing .hide-btn { display: flex; }
+        .dynamic-seat.is-hidden { display: none; }
+        body.editing .dynamic-seat.is-hidden { display: flex; opacity: 0.3; background: #000; border-style: dotted; }
+
+        body.editing .dynamic-seat { cursor: grab; border: 2px dashed var(--highlight); }
+        .controls { display: flex; gap: 10px; align-items: center; }
+        .btn { padding: 6px 15px; border-radius: 4px; cursor: pointer; border: 1px solid var(--highlight); background: transparent; color: var(--text-main); }
+        .btn.active { background: var(--highlight); color: #000; }
+        .info-card { background: var(--card-bg); padding: 15px; border-radius: 12px; border-left: 5px solid var(--highlight); min-height: 100px; }
+        select { background: #334155; color: white; border: 1px solid var(--highlight); padding: 5px 10px; border-radius: 4px; outline: none; }
+    </style>
+</head>
+<body>
+
+<header>
+    <div style="display: flex; align-items: center; gap: 20px;">
+        <h2 style="margin:0;">辦公室網路佈線監控系統 v2.8</h2>
+        <select id="floor-select" onchange="loadFloor(this.value)">
+            <option value="1F">1樓 (1F)</option>
+            <option value="2F">2樓 (2F)</option>
+            <option value="3F">3樓 (3F)</option>
+            <option value="4F">4樓 (4F)</option>
+            <option value="5F">5樓 (5F)</option>
+            <option value="6F">6樓 (6F)</option>
+            <option value="7F">7樓 (7F)</option>
+        </select>
+    </div>
+    <div class="controls">
+        <button id="edit-btn" class="btn" onclick="toggleEditMode()">進入編輯模式</button>
+        <button id="save-btn" class="btn" onclick="saveLayout()" style="display:none;">儲存佈局</button>
+        <div id="status-bar">選取：<span id="selected-id">無</span></div>
+    </div>
+</header>
+
+<div class="main-container">
+    <div id="map-container"></div>
+    <div id="side-panel">
+        <div id="switches-container"></div>
+        <div class="info-card" id="info-display">
+            <h3>詳細資訊</h3>
+            <p>點擊孔位查看 Zabbix 實時數據</p>
+        </div>
+    </div>
+</div>
+
+<script>
+    const FLOOR_CONFIGS = {
+        "1F": { switches: [{ name: "1F/2F-Access", id: "10708" }] },
+        "2F": { switches: [{ name: "1F/2F-Access", id: "10708" }] },
+        "3F": { switches: [{ name: "3F/4F-Access", id: "10707" }] },
+        "4F": { switches: [{ name: "3F/4F-Access", id: "10707" }] },
+        "5F": { switches: [{ name: "5F-TOP", id: "10704" }, { name: "5F-Down", id: "10703" }] },
+        "6F": { switches: [{ name: "6F Core", id: "10709" }, { name: "6F Access", id: "10710" }] },
+        "7F": { switches: [{  name: "7F Top", id: "10706" }, { name: "7F Down", id: "10705" }] },
+    };
+
+    let currentZabbixData = {}; 
+    let isEditing = false;
+    let currentFloor = "1F";
+
+    async function init() {
+        await loadFloor("1F");
+    }
+
+    async function loadFloor(floorId) {
+        currentFloor = floorId;
+        const config = FLOOR_CONFIGS[floorId];
+        document.getElementById('switches-container').innerHTML = '';
+        document.getElementById('map-container').innerHTML = '';
+        currentZabbixData = {}; 
+
+        for (const sw of config.switches) {
+            try {
+                const res = await fetch(`/api/switch/${sw.id}`);
+                const result = await res.json(); 
+                currentZabbixData[sw.id] = result.ports_data;
+                renderSwitchUI(sw.name, sw.id, result.total_count, result.ports_data);
+                renderMapSeats(sw.name, sw.id, result.total_count);
+            } catch (e) {
+                console.error("抓取失敗:", e);
+            }
+        }
+    }
+
+    function renderMapSeats(swName, swId, count) {
+        const map = document.getElementById('map-container');
+        const storageKey = `layout_${currentFloor}_${swId}`;
+        const savedLayout = JSON.parse(localStorage.getItem(storageKey) || '{}');
+
+        for (let i = 1; i <= count; i++) {
+            const seatId = `seat-${swId}-${i}`;
+            const seatData = savedLayout[seatId] || {};
+            
+            const seat = document.createElement('div');
+            seat.className = 'dynamic-seat';
+            if (seatData.hidden) seat.classList.add('is-hidden');
+            seat.id = seatId;
+            seat.innerText = i;
+            
+            const pos = { 
+                left: seatData.left || (Math.random() * 80 + 5) + "%", 
+                top: seatData.top || (Math.random() * 80 + 5) + "%" 
+            };
+            seat.style.left = pos.left;
+            seat.style.top = pos.top;
+
+            // 建立隱藏按鈕
+            const hideBtn = document.createElement('div');
+            hideBtn.className = 'hide-btn';
+            hideBtn.innerHTML = '✕';
+            hideBtn.onclick = (e) => {
+                e.stopPropagation();
+                seat.classList.toggle('is-hidden');
+            };
+            seat.appendChild(hideBtn);
+
+            seat.onclick = () => { if(!isEditing) selectElement(swId, i); };
+            makeDraggable(seat);
+            map.appendChild(seat);
+        }
+    }
+
+    function renderSwitchUI(swName, swId, count, data) {
+        const container = document.getElementById('switches-container');
+        const swWrapper = document.createElement('div');
+        swWrapper.className = 'switch-mockup';
+        swWrapper.innerHTML = `<div style="color:var(--highlight); margin-bottom:10px;">${swName}</div>`;
+        const grid = document.createElement('div');
+        grid.className = 'port-grid';
+        for (let i = 1; i <= count; i++) {
+            const portData = data[i.toString()] || { status: "Down", note: "" };
+            const port = document.createElement('div');
+            port.className = 'port';
+            port.id = `port-${swId}-${i}`;
+            port.innerHTML = `<div class="port-led ${portData.status === 'Up' ? 'on' : ''}"></div>${i}${portData.note ? `<div class="port-note">${portData.note}</div>` : ''}`;
+            port.onclick = () => selectElement(swId, i);
+            grid.appendChild(port);
+        }
+        swWrapper.appendChild(grid);
+        container.appendChild(swWrapper);
+    }
+
+    function makeDraggable(el) {
+        let offsetX = 0, offsetY = 0, isDragging = false;
+        el.onmousedown = function(e) {
+            if (!isEditing) return;
+            isDragging = true;
+            e.preventDefault();
+            const rect = el.getBoundingClientRect();
+            offsetX = e.clientX - rect.left;
+            offsetY = e.clientY - rect.top;
+            document.onmousemove = function(e) {
+                if (!isDragging) return;
+                const container = document.getElementById('map-container');
+                const cRect = container.getBoundingClientRect();
+                let x = e.clientX - cRect.left - offsetX;
+                let y = e.clientY - cRect.top - offsetY;
+                x = Math.max(0, Math.min(x, cRect.width - el.offsetWidth));
+                y = Math.max(0, Math.min(y, cRect.height - el.offsetHeight));
+                el.style.left = (x / cRect.width * 100) + "%";
+                el.style.top = (y / cRect.height * 100) + "%";
+            };
+            document.onmouseup = function() {
+                isDragging = false;
+                document.onmousemove = null; document.onmouseup = null;
+            };
+        };
+    }
+
+    function toggleEditMode() {
+        isEditing = !isEditing;
+        document.body.classList.toggle('editing', isEditing);
+        document.getElementById('edit-btn').innerText = isEditing ? "退出編輯" : "進入編輯模式";
+        document.getElementById('save-btn').style.display = isEditing ? "block" : "none";
+    }
+
+    function saveLayout() {
+        const config = FLOOR_CONFIGS[currentFloor];
+        config.switches.forEach(sw => {
+            const storageKey = `layout_${currentFloor}_${sw.id}`;
+            const layout = {};
+            document.querySelectorAll(`.dynamic-seat[id^="seat-${sw.id}-"]`).forEach(s => {
+                layout[s.id] = { 
+                    left: s.style.left, 
+                    top: s.style.top,
+                    hidden: s.classList.contains('is-hidden') // 關鍵：儲存隱藏狀態
+                };
+            });
+            localStorage.setItem(storageKey, JSON.stringify(layout));
+        });
+        alert(`${currentFloor} 佈局與隱藏設定已保存！`);
+    }
+
+    function selectElement(swId, portId) {
+        document.querySelectorAll('.port, .dynamic-seat').forEach(el => el.classList.remove('active'));
+        document.getElementById(`port-${swId}-${portId}`)?.classList.add('active');
+        document.getElementById(`seat-${swId}-${portId}`)?.classList.add('active');
+        document.getElementById('selected-id').innerText = `${currentFloor} P${portId}`;
+        const data = currentZabbixData[swId][portId.toString()] || {};
+        document.getElementById('info-display').innerHTML = `<h3>Port ${portId}</h3><p>狀態：<span style="color:${data.status === 'Up' ? 'var(--primary-green)' : 'var(--alert-red)'}">● ${data.status || 'Offline'}</span></p><p>備註：${data.note || '無'}</p>`;
+    }
+
+    init();
+</script>
+</body>
+</html>

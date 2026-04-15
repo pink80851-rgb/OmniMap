@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <title>網路孔座位對應系統 v2.0</title>
+    <style>
+        :root {
+            --bg-color: #0f172a;
+            --card-bg: #1e293b;
+            --primary-green: #22c55e;
+            --alert-red: #ef4444;
+            --text-main: #f8fafc;
+            --highlight: #38bdf8;
+        }
+
+        body {
+            font-family: "Microsoft JhengHei", sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            margin: 0;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+        }
+
+        header {
+            padding: 1rem 2rem;
+            background: rgba(30, 41, 59, 0.8);
+            border-bottom: 1px solid #334155;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .main-container {
+            display: flex;
+            flex: 1;
+            padding: 20px;
+            gap: 20px;
+            overflow: hidden;
+        }
+
+        /* 左側：平面圖區域 (工位圖像) */
+        #map-container {
+            flex: 2;
+            background: var(--card-bg);
+            border-radius: 12px;
+            padding: 20px;
+            position: relative;
+            overflow: hidden;
+            border: 2px dashed #334155;
+        }
+
+        /* 動態生成的工位方塊樣式 */
+        .dynamic-seat {
+            position: absolute;
+            width: 60px;
+            height: 45px;
+            background: #334155;
+            border: 2px solid #475569;
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: move;
+            font-size: 10px;
+            user-select: none;
+            transition: box-shadow 0.2s;
+        }
+
+        .dynamic-seat.active {
+            border-color: var(--highlight);
+            box-shadow: 0 0 12px var(--highlight);
+            z-index: 100;
+        }
+
+        /* 右側：Switch 面板 */
+        #side-panel {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            overflow-y: auto;
+        }
+
+        .switch-title {
+            font-size: 14px;
+            color: var(--highlight);
+            margin-bottom: 8px;
+        }
+
+        .switch-mockup {
+            background: #000;
+            padding: 15px;
+            border-radius: 8px;
+            border: 2px solid #334155;
+            margin-bottom: 15px;
+        }
+
+        .port-grid {
+            display: grid;
+            grid-template-columns: repeat(12, 1fr); /* 固定 12 欄 */
+            gap: 8px;
+        }
+
+        .port {
+            aspect-ratio: 1;
+            background: #111;
+            border: 1px solid #444;
+            border-radius: 4px;
+            position: relative;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 10px;
+        }
+
+        .port.active {
+            border-color: var(--highlight);
+            box-shadow: 0 0 10px var(--highlight);
+        }
+
+        .port-led {
+            width: 6px;
+            height: 6px;
+            background: #333;
+            border-radius: 50%;
+            position: absolute;
+            top: 4px;
+        }
+
+        .port-led.on {
+            background: var(--primary-green);
+            box-shadow: 0 0 5px var(--primary-green);
+            animation: blink 1.5s infinite;
+        }
+
+        @keyframes blink { 50% { opacity: 0.5; } }
+
+        .info-card {
+            background: var(--card-bg);
+            padding: 20px;
+            border-radius: 12px;
+            border-left: 5px solid var(--highlight);
+        }
+    </style>
+</head>
+<body>
+
+<header>
+    <h2>辦公室網路佈線監控系統 v2.0</h2>
+    <div id="status-bar">目前選取：<span id="selected-id">無</span></div>
+</header>
+
+<div class="main-container">
+    <div id="map-container">
+        <div style="color:#475569; position:absolute; bottom:10px; right:10px;">平面圖區域 (可拖移工位)</div>
+    </div>
+
+    <div id="side-panel">
+        <div id="switches-container"></div>
+        
+        <div class="info-card" id="info-display">
+            <h3>詳細資訊</h3>
+            <p>請點擊方塊進行偵測</p>
+        </div>
+    </div>
+</div>
+
+<script>
+    const switchesContainer = document.getElementById('switches-container');
+    const mapContainer = document.getElementById('map-container');
+    const infoDisplay = document.getElementById('info-display');
+    const selectedSpan = document.getElementById('selected-id');
+
+    // 模擬 Zabbix LLD 回傳的 Host 資訊
+    const TARGET_SWITCHES = [
+        { hostId: "10708", name: "Core-SW-01", ports: 24 },
+        { hostId: "10709", name: "Access-SW-02", ports: 48 }
+    ];
+
+    // 初始化生成
+    function init() {
+        TARGET_SWITCHES.forEach(sw => {
+            renderSwitch(sw);
+            renderWorkstations(sw);
+        });
+    }
+
+    // 1. 動態生成 Switch 面板 (自動分排邏輯)
+    function renderSwitch(sw) {
+        const swWrapper = document.createElement('div');
+        swWrapper.className = 'switch-mockup';
+        swWrapper.innerHTML = `<div class="switch-title">${sw.name} (${sw.ports} Ports)</div>`;
+        
+        const grid = document.createElement('div');
+        grid.className = 'port-grid';
+        
+        for (let i = 1; i <= sw.ports; i++) {
+            const port = document.createElement('div');
+            port.className = 'port';
+            port.id = `port-${sw.hostId}-${i}`;
+            port.innerHTML = `<div class="port-led on"></div>${i}`;
+            port.onclick = () => selectElement(sw.hostId, i);
+            grid.appendChild(port);
+        }
+        
+        swWrapper.appendChild(grid);
+        switchesContainer.appendChild(swWrapper);
+    }
+
+    // 2. 動態生成工位圖像 (支援拖移)
+    function renderWorkstations(sw) {
+        for (let i = 1; i <= sw.ports; i++) {
+            const seat = document.createElement('div');
+            seat.className = 'dynamic-seat';
+            seat.id = `seat-${sw.hostId}-${i}`;
+            seat.innerText = `P${i}`;
+            
+            // 初始隨機排列，防止重疊
+            seat.style.left = `${Math.random() * 50}px`;
+            seat.style.top = `${Math.random() * 300}px`;
+            
+            seat.onclick = () => selectElement(sw.hostId, i);
+            makeDraggable(seat);
+            mapContainer.appendChild(seat);
+        }
+    }
+
+    // 3. 拖移邏輯
+    function makeDraggable(el) {
+        let isDragging = false;
+        el.onmousedown = (e) => {
+            isDragging = true;
+            el.classList.add('active');
+            let shiftX = e.clientX - el.getBoundingClientRect().left;
+            let shiftY = e.clientY - el.getBoundingClientRect().top;
+
+            document.onmousemove = (e) => {
+                if (!isDragging) return;
+                el.style.left = e.clientX - mapContainer.getBoundingClientRect().left - shiftX + 'px';
+                el.style.top = e.clientY - mapContainer.getBoundingClientRect().top - shiftY + 'px';
+            };
+
+            document.onmouseup = () => {
+                isDragging = false;
+                document.onmousemove = null;
+            };
+        };
+        el.ondragstart = () => false;
+    }
+
+    // 4. 連動選擇邏輯
+    function selectElement(hostId, portId) {
+        // 清除所有高亮
+        document.querySelectorAll('.port, .dynamic-seat').forEach(el => el.classList.remove('active'));
+
+        const targetPort = document.getElementById(`port-${hostId}-${portId}`);
+        const targetSeat = document.getElementById(`seat-${hostId}-${portId}`);
+
+        if (targetPort) targetPort.classList.add('active');
+        if (targetSeat) targetSeat.classList.add('active');
+
+        selectedSpan.innerText = `SW:${hostId} / Port:${portId}`;
+        infoDisplay.innerHTML = `
+            <h3>${hostId} - Port ${portId}</h3>
+            <p>狀態: <span style="color:var(--primary-green)">● Connected</span></p>
+            <p>這是一個自動產生的對應關係</p>
+        `;
+    }
+
+    init();
+</script>
+
+</body>
+</html>

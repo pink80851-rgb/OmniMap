@@ -1,0 +1,12 @@
+# 隱私資訊 (絕對不能上傳)
+.env
+
+# Python 快取與環境
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+# 資料庫與暫存檔 (如果你之後把座標存成 json)
+data/*.json
+*.log
