@@ -1,0 +1,26 @@
+graph TD
+    %% Nodes
+    User[使用者瀏覽器]
+    Flask[Flask App (app.py)]
+    Normalizer[資料標準化層<br/>get_standardized_network_data]
+    ZabbixAdapter[Zabbix 轉接層<br/>fetch_raw_zabbix_items]
+    ZabbixAPI[Zabbix API Server]
+    LayoutJSON[data/layout.json<br/>(v1.1 預計加入)]
+
+    %% Styles
+    style User fill:#f9f,stroke:#333,stroke-width:2px
+    style Flask fill:#bbf,stroke:#333,stroke-width:2px
+    style Normalizer fill:#dfd,stroke:#333,stroke-width:2px,stroke-dasharray: 5 5
+    style ZabbixAPI fill:#ddd,stroke:#333,stroke-width:1px
+
+    %% Flow
+    User --"1. 訪問首頁 (/)"--> Flask
+    Flask --"2. 渲染模板"--> User
+    User --"3. 請求 Switch 資料<br/>(/api/switch/host_id)"--> Flask
+    Flask --"4. 呼叫清洗邏輯"--> Normalizer
+    Normalizer --"5. 請求原始數據"--> ZabbixAdapter
+    ZabbixAdapter --"6. JSON-RPC 請求<br/>(使用 .env Token)"--> ZabbixAPI
+    ZabbixAPI --"7. 回傳原始 Items JSON"--> ZabbixAdapter
+    ZabbixAdapter --"8. 原始資料"--> Normalizer
+    Normalizer --"9. Regex 解析與標準化<br/>(Canonical Model)"--> Flask
+    Flask --"10. 回傳乾淨 JSON"--> User

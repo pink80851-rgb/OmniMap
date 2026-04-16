@@ -2,7 +2,7 @@
 <html lang="zh-TW">
 <head>
     <meta charset="UTF-8">
-    <title>辦公室網路佈線監控系統 v2.8</title>
+    <title>辦公室網路佈線監控系統 v3.0</title>
     <style>
         :root {
             --bg-color: #0f172a; --card-bg: #1e293b;
@@ -15,7 +15,7 @@
         #map-container { flex: 2; background: var(--card-bg); border-radius: 12px; position: relative; border: 2px dashed #334155; overflow: hidden; }
         #side-panel { flex: 1; display: flex; flex-direction: column; gap: 20px; overflow-y: auto; }
         
-        .switch-mockup { background: #000; padding: 15px; border-radius: 8px; border: 2px solid #334155; }
+        .switch-mockup { background: #000; padding: 15px; border-radius: 8px; border: 2px solid #334155; margin-bottom: 10px; }
         .port-grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 8px; }
         .port { aspect-ratio: 1; background: #111; border: 1px solid #444; border-radius: 4px; position: relative; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 10px; transition: 0.2s; }
         .port.active { border-color: var(--highlight); box-shadow: 0 0 10px var(--highlight); }
@@ -23,17 +23,20 @@
         .port-led.on { background: var(--primary-green); box-shadow: 0 0 5px var(--primary-green); }
         .port-note { font-size: 8px; color: var(--highlight); position: absolute; bottom: -12px; white-space: nowrap; pointer-events: none; }
 
-        .dynamic-seat { position: absolute; width: 50px; height: 35px; background: #334155; border: 2px solid #475569; border-radius: 4px; display: flex; align-items: center; justify-content: center; font-size: 10px; cursor: pointer; transition: transform 0.1s; z-index: 10; }
+        .dynamic-seat { position: absolute; width: 50px; height: 35px; background: #334155; border: 2px solid #475569; border-radius: 4px; display: flex; align-items: center; justify-content: center; font-size: 10px; cursor: pointer; transition: 0.2s; z-index: 10; }
         .dynamic-seat.active { border-color: var(--highlight); box-shadow: 0 0 12px var(--highlight); z-index: 100; transform: scale(1.1); }
         
-        /* 隱藏邏輯 CSS */
-        .hide-btn { 
-            position: absolute; top: -8px; right: -8px; width: 18px; height: 18px; 
-            background: var(--alert-red); color: white; border-radius: 50%; 
+        /* 功能按鈕 CSS */
+        .hide-btn, .clone-btn { 
+            position: absolute; width: 18px; height: 18px; 
+            color: white; border-radius: 50%; 
             display: none; align-items: center; justify-content: center; 
             font-size: 12px; border: 1px solid white; z-index: 20; 
         }
-        body.editing .hide-btn { display: flex; }
+        .hide-btn { top: -8px; right: -8px; background: var(--alert-red); }
+        .clone-btn { top: -8px; left: -8px; background: var(--highlight); color: #000; font-weight: bold; cursor: copy; }
+        
+        body.editing .hide-btn, body.editing .clone-btn { display: flex; }
         .dynamic-seat.is-hidden { display: none; }
         body.editing .dynamic-seat.is-hidden { display: flex; opacity: 0.3; background: #000; border-style: dotted; }
 
@@ -42,14 +45,14 @@
         .btn { padding: 6px 15px; border-radius: 4px; cursor: pointer; border: 1px solid var(--highlight); background: transparent; color: var(--text-main); }
         .btn.active { background: var(--highlight); color: #000; }
         .info-card { background: var(--card-bg); padding: 15px; border-radius: 12px; border-left: 5px solid var(--highlight); min-height: 100px; }
-        select { background: #334155; color: white; border: 1px solid var(--highlight); padding: 5px 10px; border-radius: 4px; outline: none; }
+        select { background: #334155; color: white; border: 1px solid var(--highlight); padding: 5px 10px; border-radius: 4px; outline: none; }    
     </style>
 </head>
 <body>
 
 <header>
     <div style="display: flex; align-items: center; gap: 20px;">
-        <h2 style="margin:0;">辦公室網路佈線監控系統 v2.8</h2>
+        <h2 style="margin:0;">辦公室網路佈線監控系統 v3.0</h2>
         <select id="floor-select" onchange="loadFloor(this.value)">
             <option value="1F">1樓 (1F)</option>
             <option value="2F">2樓 (2F)</option>
@@ -73,7 +76,7 @@
         <div id="switches-container"></div>
         <div class="info-card" id="info-display">
             <h3>詳細資訊</h3>
-            <p>點擊孔位查看 Zabbix 實時數據</p>
+            <p>點擊孔位或工位查看實時數據</p>
         </div>
     </div>
 </div>
@@ -86,7 +89,7 @@
         "4F": { switches: [{ name: "3F/4F-Access", id: "10707" }] },
         "5F": { switches: [{ name: "5F-TOP", id: "10704" }, { name: "5F-Down", id: "10703" }] },
         "6F": { switches: [{ name: "6F Core", id: "10709" }, { name: "6F Access", id: "10710" }] },
-        "7F": { switches: [{  name: "7F Top", id: "10706" }, { name: "7F Down", id: "10705" }] },
+        "7F": { switches: [{ name: "7F Top", id: "10706" }, { name: "7F Down", id: "10705" }] },
     };
 
     let currentZabbixData = {}; 
@@ -99,59 +102,98 @@
 
     async function loadFloor(floorId) {
         currentFloor = floorId;
-        const config = FLOOR_CONFIGS[floorId];
         document.getElementById('switches-container').innerHTML = '';
         document.getElementById('map-container').innerHTML = '';
         currentZabbixData = {}; 
 
+        const config = FLOOR_CONFIGS[floorId];
         for (const sw of config.switches) {
             try {
                 const res = await fetch(`/api/switch/${sw.id}`);
                 const result = await res.json(); 
                 currentZabbixData[sw.id] = result.ports_data;
                 renderSwitchUI(sw.name, sw.id, result.total_count, result.ports_data);
-                renderMapSeats(sw.name, sw.id, result.total_count);
+                renderMapSeats(sw.id, result.total_count);
             } catch (e) {
                 console.error("抓取失敗:", e);
             }
         }
     }
 
-    function renderMapSeats(swName, swId, count) {
-        const map = document.getElementById('map-container');
+    // 建立工位方塊的核心函式 (支援 1:N)
+    function createSeatElement(swId, portNum, data = {}) {
+    const map = document.getElementById('map-container');
+    const seat = document.createElement('div');
+    seat.className = 'dynamic-seat';
+    seat.dataset.swId = swId;
+    seat.dataset.portNum = portNum;
+    
+    // 標記這是不是克隆出來的
+    const isClone = data.isClone || false;
+    if (isClone) seat.dataset.isClone = "true";
+
+    seat.innerText = portNum;
+    seat.style.left = data.left || "10%";
+    seat.style.top = data.top || "10%";
+    if (data.hidden) seat.classList.add('is-hidden');
+
+    // --- 改良後的按鈕邏輯 ---
+    const actionBtn = document.createElement('div');
+    
+    if (isClone) {
+        // 克隆件：顯示刪除按鈕 (紅色，垃圾桶圖示或簡潔的 - )
+        actionBtn.className = 'hide-btn'; // 延用樣式，或你可以自訂一個 .delete-btn
+        actionBtn.style.background = '#ef4444'; // 強制紅色
+        actionBtn.innerHTML = '－'; 
+        actionBtn.title = "刪除此分身";
+        actionBtn.onclick = (e) => {
+            e.stopPropagation();
+            if(confirm(`確定要刪除 Port ${portNum} 的這個分身嗎？`)) {
+                seat.remove(); // 直接從 DOM 移除，saveLayout 時就不會抓到它
+            }
+        };
+    } else {
+        // 原始件：顯示隱藏按鈕 (✕)
+        actionBtn.className = 'hide-btn';
+        actionBtn.innerHTML = '✕';
+        actionBtn.title = "隱藏/顯示原始孔位";
+        actionBtn.onclick = (e) => {
+            e.stopPropagation();
+            seat.classList.toggle('is-hidden');
+        };
+    }
+    seat.appendChild(actionBtn);
+
+    // --- 克隆按鈕 (+) ---
+    const cloneBtn = document.createElement('div');
+    cloneBtn.className = 'clone-btn';
+    cloneBtn.innerHTML = '+';
+    cloneBtn.onclick = (e) => {
+        e.stopPropagation();
+        createSeatElement(swId, portNum, {
+            left: (parseFloat(seat.style.left) + 3) + "%",
+            top: (parseFloat(seat.style.top) + 3) + "%",
+            isClone: true // 這裡標記為新產生的克隆件
+        });
+    };
+    seat.appendChild(cloneBtn);
+
+    seat.onclick = () => { if(!isEditing) selectElement(swId, portNum); };
+    makeDraggable(seat); // 記得用剛才優化過不卡頓的拖拽函式
+    map.appendChild(seat);
+    updateSeatStatusUI(seat);
+}
+
+    function renderMapSeats(swId, count) {
         const storageKey = `layout_${currentFloor}_${swId}`;
-        const savedLayout = JSON.parse(localStorage.getItem(storageKey) || '{}');
-
-        for (let i = 1; i <= count; i++) {
-            const seatId = `seat-${swId}-${i}`;
-            const seatData = savedLayout[seatId] || {};
-            
-            const seat = document.createElement('div');
-            seat.className = 'dynamic-seat';
-            if (seatData.hidden) seat.classList.add('is-hidden');
-            seat.id = seatId;
-            seat.innerText = i;
-            
-            const pos = { 
-                left: seatData.left || (Math.random() * 80 + 5) + "%", 
-                top: seatData.top || (Math.random() * 80 + 5) + "%" 
-            };
-            seat.style.left = pos.left;
-            seat.style.top = pos.top;
-
-            // 建立隱藏按鈕
-            const hideBtn = document.createElement('div');
-            hideBtn.className = 'hide-btn';
-            hideBtn.innerHTML = '✕';
-            hideBtn.onclick = (e) => {
-                e.stopPropagation();
-                seat.classList.toggle('is-hidden');
-            };
-            seat.appendChild(hideBtn);
-
-            seat.onclick = () => { if(!isEditing) selectElement(swId, i); };
-            makeDraggable(seat);
-            map.appendChild(seat);
+        const savedLayout = JSON.parse(localStorage.getItem(storageKey) || '[]');
+        
+        if (Array.isArray(savedLayout) && savedLayout.length > 0) {
+            // 讀取 1:N 存檔
+            savedLayout.forEach(item => createSeatElement(swId, item.port_num, item));
+        } else {
+            // 初始化 1:1 佈局
+            for (let i = 1; i <= count; i++) createSeatElement(swId, i);
         }
     }
 
@@ -159,7 +201,7 @@
         const container = document.getElementById('switches-container');
         const swWrapper = document.createElement('div');
         swWrapper.className = 'switch-mockup';
-        swWrapper.innerHTML = `<div style="color:var(--highlight); margin-bottom:10px;">${swName}</div>`;
+        swWrapper.innerHTML = `<div style="color:var(--highlight); margin-bottom:10px; font-weight:bold;">${swName}</div>`;
         const grid = document.createElement('div');
         grid.className = 'port-grid';
         for (let i = 1; i <= count; i++) {
@@ -175,32 +217,66 @@
         container.appendChild(swWrapper);
     }
 
+    function updateSeatStatusUI(seat) {
+        const swId = seat.dataset.swId;
+        const portNum = seat.dataset.portNum;
+        const portData = currentZabbixData[swId]?.[portNum.toString()] || { status: "Down" };
+        seat.style.borderColor = portData.status === 'Up' ? 'var(--primary-green)' : 'var(--alert-red)';
+    }
+
     function makeDraggable(el) {
-        let offsetX = 0, offsetY = 0, isDragging = false;
-        el.onmousedown = function(e) {
-            if (!isEditing) return;
-            isDragging = true;
-            e.preventDefault();
-            const rect = el.getBoundingClientRect();
-            offsetX = e.clientX - rect.left;
-            offsetY = e.clientY - rect.top;
-            document.onmousemove = function(e) {
-                if (!isDragging) return;
+    let offsetX = 0, offsetY = 0, isDragging = false;
+    let requestID = null;
+
+    el.onmousedown = function(e) {
+        if (!isEditing) return;
+        
+        // 1. 準備拖動
+        isDragging = true;
+        e.preventDefault();
+        const rect = el.getBoundingClientRect();
+        offsetX = e.clientX - rect.left;
+        offsetY = e.clientY - rect.top;
+
+        // 2. 暫時關閉動畫效果，讓拖拉不卡頓
+        el.style.transition = 'none';
+        el.style.zIndex = '1000';
+
+        document.onmousemove = function(e) {
+            if (!isDragging) return;
+
+            // 3. 使用 requestAnimationFrame 優化效能
+            if (requestID) cancelAnimationFrame(requestID);
+            
+            requestID = requestAnimationFrame(() => {
                 const container = document.getElementById('map-container');
                 const cRect = container.getBoundingClientRect();
+                
                 let x = e.clientX - cRect.left - offsetX;
                 let y = e.clientY - cRect.top - offsetY;
+
+                // 邊界檢查
                 x = Math.max(0, Math.min(x, cRect.width - el.offsetWidth));
                 y = Math.max(0, Math.min(y, cRect.height - el.offsetHeight));
+
+                // 更新座標
                 el.style.left = (x / cRect.width * 100) + "%";
                 el.style.top = (y / cRect.height * 100) + "%";
-            };
-            document.onmouseup = function() {
-                isDragging = false;
-                document.onmousemove = null; document.onmouseup = null;
-            };
+            });
         };
-    }
+
+        document.onmouseup = function() {
+            isDragging = false;
+            if (requestID) cancelAnimationFrame(requestID);
+            
+            // 4. 恢復原狀
+            el.style.transition = ''; // 恢復 CSS 設定的 transition
+            el.style.zIndex = '10';
+            document.onmousemove = null;
+            document.onmouseup = null;
+        };
+    };
+}
 
     function toggleEditMode() {
         isEditing = !isEditing;
@@ -210,29 +286,48 @@
     }
 
     function saveLayout() {
-        const config = FLOOR_CONFIGS[currentFloor];
-        config.switches.forEach(sw => {
-            const storageKey = `layout_${currentFloor}_${sw.id}`;
-            const layout = {};
-            document.querySelectorAll(`.dynamic-seat[id^="seat-${sw.id}-"]`).forEach(s => {
-                layout[s.id] = { 
+    const config = FLOOR_CONFIGS[currentFloor];
+    config.switches.forEach(sw => {
+        const storageKey = `layout_${currentFloor}_${sw.id}`;
+        const layout = [];
+        
+        document.querySelectorAll(`.dynamic-seat`).forEach(s => {
+            if(s.dataset.swId === sw.id) {
+                layout.push({ 
+                    port_num: s.dataset.portNum,
                     left: s.style.left, 
                     top: s.style.top,
-                    hidden: s.classList.contains('is-hidden') // 關鍵：儲存隱藏狀態
-                };
-            });
-            localStorage.setItem(storageKey, JSON.stringify(layout));
+                    hidden: s.classList.contains('is-hidden'),
+                    isClone: s.dataset.isClone === "true" // 存入克隆標記
+                });
+            }
         });
-        alert(`${currentFloor} 佈局與隱藏設定已保存！`);
-    }
+        localStorage.setItem(storageKey, JSON.stringify(layout));
+    });
+    alert(`佈局已優化存儲！已自動清除無效資源。`);
+}
 
-    function selectElement(swId, portId) {
+    function selectElement(swId, portNum) {
+        // 清除舊選取
         document.querySelectorAll('.port, .dynamic-seat').forEach(el => el.classList.remove('active'));
-        document.getElementById(`port-${swId}-${portId}`)?.classList.add('active');
-        document.getElementById(`seat-${swId}-${portId}`)?.classList.add('active');
-        document.getElementById('selected-id').innerText = `${currentFloor} P${portId}`;
-        const data = currentZabbixData[swId][portId.toString()] || {};
-        document.getElementById('info-display').innerHTML = `<h3>Port ${portId}</h3><p>狀態：<span style="color:${data.status === 'Up' ? 'var(--primary-green)' : 'var(--alert-red)'}">● ${data.status || 'Offline'}</span></p><p>備註：${data.note || '無'}</p>`;
+        
+        // 選取 Switch 孔位
+        document.getElementById(`port-${swId}-${portNum}`)?.classList.add('active');
+        
+        // 選取地圖上所有連動的工位 (1:N 高亮)
+        document.querySelectorAll(`.dynamic-seat`).forEach(s => {
+            if(s.dataset.swId === swId && s.dataset.portNum == portNum) {
+                s.classList.add('active');
+            }
+        });
+
+        document.getElementById('selected-id').innerText = `${currentFloor} P${portNum}`;
+        const data = currentZabbixData[swId]?.[portNum.toString()] || {};
+        document.getElementById('info-display').innerHTML = `
+            <h3>Port ${portNum}</h3>
+            <p>狀態：<span style="color:${data.status === 'Up' ? 'var(--primary-green)' : 'var(--alert-red)'}">● ${data.status || 'Offline'}</span></p>
+            <p>備註：${data.note || '無'}</p>
+        `;
     }
 
     init();
